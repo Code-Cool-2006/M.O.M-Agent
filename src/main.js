@@ -1,4 +1,9 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
+
+const isSquirrelStartup = process.argv.some((arg) => typeof arg === 'string' && arg.startsWith('--squirrel-'));
+if (isSquirrelStartup) {
+  app.quit();
+}
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
@@ -76,19 +81,21 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => mainWindow.show());
 }
 
-app.whenReady().then(() => {
-  loadDotEnv();
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  createWindow();
-});
+if (!isSquirrelStartup) {
+  app.whenReady().then(() => {
+    loadDotEnv();
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    createWindow();
+  });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}
 
 // ── Window control IPC ─────────────────────────────────────────────────
 ipcMain.on('app:minimize', () => mainWindow?.minimize());
