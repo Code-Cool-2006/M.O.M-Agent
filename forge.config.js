@@ -3,12 +3,21 @@ const { VitePlugin } = require('@electron-forge/plugin-vite');
 module.exports = {
   packagerConfig: {
     asar: true,
+    icon: './assets/icon',
     extraResource: [
-      './backend',
+      './backend/capture.py',
+      './backend/transcribe.py',
+      './backend/summarize.py',
+      './assets',
     ],
   },
   makers: [
-    { name: '@electron-forge/maker-squirrel', config: {} },
+    {
+      name: '@electron-forge/maker-squirrel',
+      config: {
+        setupIcon: './assets/icon.ico',
+      },
+    },
     { name: '@electron-forge/maker-zip', platforms: ['win32', 'darwin'] },
     { name: '@electron-forge/maker-deb', config: {} },
     { name: '@electron-forge/maker-rpm', config: {} },

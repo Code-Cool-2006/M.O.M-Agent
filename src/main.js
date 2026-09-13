@@ -23,23 +23,19 @@ function pyScript(name) {
   return path.join(dir, name);
 }
 
-// Load .env file so child processes inherit the API key
+// Load .env file only in local development so packaged apps do not bundle secrets
 function loadDotEnv() {
-  const envPaths = [
-    path.join(getBackendDir(), '.env'),
-    path.join(STATE_DIR, '.env'),
-  ];
-  for (const envPath of envPaths) {
-    if (!fs.existsSync(envPath)) continue;
-    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#') || !line.includes('=')) continue;
-      const idx = line.indexOf('=');
-      const key = line.slice(0, idx).trim();
-      const val = line.slice(idx + 1).trim();
-      if (!process.env[key] && val) process.env[key] = val;
-    }
+  if (app.isPackaged) return;
+  const envPath = path.join(app.getAppPath(), 'backend', '.env');
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || !line.includes('=')) continue;
+    const idx = line.indexOf('=');
+    const key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim();
+    if (!process.env[key] && val) process.env[key] = val;
   }
 }
 
@@ -47,6 +43,10 @@ function loadDotEnv() {
 let mainWindow;
 
 function createWindow() {
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'icon.png')
+    : path.join(app.getAppPath(), 'assets', 'icon.png');
+
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -55,6 +55,7 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#1e1e1e',
+    icon: fs.existsSync(iconPath) ? iconPath : path.join(app.getAppPath(), 'assets', 'icon.ico'),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -103,7 +104,7 @@ function getSettings() {
     pythonPath: process.platform === 'win32' ? 'python' : 'python3',
     whisperModel: 'small',
     geminiModel: 'gemini-3.6-flash',
-    geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiApiKey: app.isPackaged ? '' : (process.env.GEMINI_API_KEY || ''),
   };
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
@@ -123,16 +124,6 @@ ipcMain.handle('settings:save', (_e, settings) => {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
   if (settings.geminiApiKey) {
     process.env.GEMINI_API_KEY = settings.geminiApiKey;
-    try {
-      const envPath = path.join(getBackendDir(), '.env');
-      let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
-      if (content.includes('GEMINI_API_KEY=')) {
-        content = content.replace(/GEMINI_API_KEY=.*/, `GEMINI_API_KEY=${settings.geminiApiKey}`);
-      } else {
-        content += `\nGEMINI_API_KEY=${settings.geminiApiKey}\n`;
-      }
-      fs.writeFileSync(envPath, content, 'utf-8');
-    } catch {}
   }
   return { ok: true };
 });
