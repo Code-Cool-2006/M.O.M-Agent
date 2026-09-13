@@ -2,9 +2,11 @@
   "name": "mom-agent",
   "version": "1.0.0",
   "description": "Meeting Minutes Agent — Desktop App",
+  "author": "Rishab",
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "electron-forge start",
+    "dev": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make"
   },

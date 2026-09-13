@@ -4,14 +4,12 @@ module.exports = {
   packagerConfig: {
     asar: true,
     extraResource: [
-      './backend/capture.py',
-      './backend/transcribe.py',
-      './backend/summarize.py',
-      './backend/.env',
+      './backend',
     ],
   },
   makers: [
-    { name: '@electron-forge/maker-zip' },
+    { name: '@electron-forge/maker-squirrel', config: {} },
+    { name: '@electron-forge/maker-zip', platforms: ['win32', 'darwin'] },
     { name: '@electron-forge/maker-deb', config: {} },
     { name: '@electron-forge/maker-rpm', config: {} },
   ],

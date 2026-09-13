@@ -12,6 +12,8 @@ export default function App() {
     sessions,
     status,
     processing,
+    errorMessage,
+    dismissError,
     startSession,
     stopSession,
     deleteSession,
@@ -46,7 +48,13 @@ export default function App() {
   const renderContent = () => {
     // Show processing overlay when stopping
     if (processing) {
-      return <ProcessingSteps currentStep={processing} />;
+      return (
+        <ProcessingSteps
+          currentStep={processing}
+          errorMessage={errorMessage}
+          onDismiss={dismissError}
+        />
+      );
     }
 
     switch (view) {

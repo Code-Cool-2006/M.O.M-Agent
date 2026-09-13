@@ -10,7 +10,10 @@ Linux (PulseAudio/PipeWire) with the same API.
 import argparse
 import sys
 import time
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import soundcard as sc
@@ -29,31 +32,55 @@ def main():
     out_path = Path(args.out)
     stop_flag = Path(args.stop_flag)
 
-    speaker = sc.default_speaker()
-    loopback_mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
+    loopback_mic = None
+    try:
+        speaker = sc.default_speaker()
+        if speaker:
+            loopback_mic = sc.get_microphone(id=str(speaker.name), include_loopback=True)
+    except Exception:
+        pass
+
+    real_mic = None
     try:
         real_mic = sc.default_microphone()
     except Exception:
-        real_mic = None
+        pass
+
+    if not loopback_mic and not real_mic:
+        raise RuntimeError("No audio output loopback or microphone available.")
 
     with sf.SoundFile(out_path, mode="w", samplerate=SAMPLE_RATE, channels=1, subtype="PCM_16") as f:
-        with loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) as loop_rec:
-            mic_rec_cm = real_mic.recorder(samplerate=SAMPLE_RATE, channels=1) if real_mic else None
-            mic_rec = mic_rec_cm.__enter__() if mic_rec_cm else None
-            try:
-                while not stop_flag.exists():
+        loop_cm = loopback_mic.recorder(samplerate=SAMPLE_RATE, channels=1) if loopback_mic else None
+        mic_cm = real_mic.recorder(samplerate=SAMPLE_RATE, channels=1) if real_mic else None
+
+        loop_rec = loop_cm.__enter__() if loop_cm else None
+        mic_rec = mic_cm.__enter__() if mic_cm else None
+
+        try:
+            while not stop_flag.exists():
+                if loop_rec and mic_rec:
                     loop_data = loop_rec.record(numframes=BLOCK_SIZE)
-                    if mic_rec is not None:
-                        mic_data = mic_rec.record(numframes=BLOCK_SIZE)
-                        n = min(len(loop_data), len(mic_data))
-                        mixed = (loop_data[:n] + mic_data[:n]) / 2.0
-                    else:
-                        mixed = loop_data
-                    mixed = np.clip(mixed, -1.0, 1.0)
-                    f.write(mixed)
-            finally:
-                if mic_rec_cm:
-                    mic_rec_cm.__exit__(None, None, None)
+                    mic_data = mic_rec.record(numframes=BLOCK_SIZE)
+                    n = min(len(loop_data), len(mic_data))
+                    mixed = (loop_data[:n] + mic_data[:n]) / 2.0
+                elif loop_rec:
+                    mixed = loop_rec.record(numframes=BLOCK_SIZE)
+                else:
+                    mixed = mic_rec.record(numframes=BLOCK_SIZE)
+
+                mixed = np.clip(mixed, -1.0, 1.0)
+                f.write(mixed)
+        finally:
+            if loop_cm:
+                try:
+                    loop_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
+            if mic_cm:
+                try:
+                    mic_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

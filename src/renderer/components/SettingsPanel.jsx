@@ -2,14 +2,20 @@ import React, { useState, useEffect } from 'react';
 
 export default function SettingsPanel() {
   const [settings, setSettings] = useState({
-    pythonPath: 'python3',
+    geminiApiKey: '',
+    geminiModel: 'gemini-3.6-flash',
     whisperModel: 'small',
-    geminiModel: 'gemini-2.0-flash',
+    pythonPath: 'python',
   });
   const [saved, setSaved] = useState(false);
+  const [showKey, setShowKey] = useState(false);
 
   useEffect(() => {
-    window.momAPI.getSettings().then(setSettings);
+    window.momAPI.getSettings().then((data) => {
+      if (data) {
+        setSettings((prev) => ({ ...prev, ...data }));
+      }
+    });
   }, []);
 
   const handleSave = async () => {
@@ -29,19 +35,28 @@ export default function SettingsPanel() {
       <p className="settings__subtitle">Configure your MOM Agent preferences.</p>
 
       <div className="settings__group">
-        <label className="settings__label">Whisper Model</label>
-        <select
-          className="settings__select"
-          value={settings.whisperModel}
-          onChange={(e) => update('whisperModel', e.target.value)}
-        >
-          <option value="tiny">Tiny — Fastest, least accurate</option>
-          <option value="base">Base — Fast, decent accuracy</option>
-          <option value="small">Small — Balanced (recommended)</option>
-          <option value="medium">Medium — Best accuracy, slower</option>
-        </select>
+        <label className="settings__label">Gemini API Key</label>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            className="settings__input"
+            type={showKey ? 'text' : 'password'}
+            value={settings.geminiApiKey || ''}
+            onChange={(e) => update('geminiApiKey', e.target.value)}
+            placeholder="AIzaSy... / AQ.Ab8..."
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="titlebar__icon-btn"
+            style={{ padding: '0 12px', height: '38px', borderRadius: '6px', border: '1px solid #333' }}
+            onClick={() => setShowKey(!showKey)}
+            title={showKey ? 'Hide key' : 'Show key'}
+          >
+            {showKey ? '🙈' : '👁'}
+          </button>
+        </div>
         <p className="settings__hint">
-          Larger models are more accurate but take longer to transcribe.
+          Your Google Gemini API Key. Required for transcription and meeting minutes generation.
         </p>
       </div>
 
@@ -50,12 +65,29 @@ export default function SettingsPanel() {
         <input
           className="settings__input"
           type="text"
-          value={settings.geminiModel}
+          value={settings.geminiModel || 'gemini-3.6-flash'}
           onChange={(e) => update('geminiModel', e.target.value)}
-          placeholder="gemini-2.0-flash"
+          placeholder="gemini-3.6-flash"
         />
         <p className="settings__hint">
-          The Gemini model used for generating meeting minutes.
+          Recommended: gemini-3.6-flash for fast and structured summaries.
+        </p>
+      </div>
+
+      <div className="settings__group">
+        <label className="settings__label">Whisper Model</label>
+        <select
+          className="settings__select"
+          value={settings.whisperModel || 'small'}
+          onChange={(e) => update('whisperModel', e.target.value)}
+        >
+          <option value="tiny">Tiny — Fastest, least accurate</option>
+          <option value="base">Base — Fast, good accuracy</option>
+          <option value="small">Small — Balanced (recommended)</option>
+          <option value="medium">Medium — High accuracy, slower</option>
+        </select>
+        <p className="settings__hint">
+          Used for local transcription. Automatically falls back to Gemini Audio if unavailable.
         </p>
       </div>
 
@@ -64,12 +96,12 @@ export default function SettingsPanel() {
         <input
           className="settings__input"
           type="text"
-          value={settings.pythonPath}
+          value={settings.pythonPath || ''}
           onChange={(e) => update('pythonPath', e.target.value)}
-          placeholder="python3"
+          placeholder="python"
         />
         <p className="settings__hint">
-          Path to the Python executable. Use a full path if using a virtual environment.
+          Command or full path to the Python executable (e.g. "python" on Windows, "python3" on Linux/macOS).
         </p>
       </div>
 
