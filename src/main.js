@@ -1,36 +1,41 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
-
-if (require('electron-squirrel-startup')) {
-  app.quit();
-}
+const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 
+// Handle Windows Squirrel installer lifecycle events natively
+function handleSquirrelEvent() {
+  if (process.platform !== 'win32') return false;
+  const cmd = process.argv[1];
+  const target = path.basename(process.execPath);
+  if (cmd === '--squirrel-install' || cmd === '--squirrel-updated') {
+    const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
+    spawn(updateExe, ['--createShortcut=' + target], { detached: true }).on('close', () => app.quit());
+    return true;
+  }
+  if (cmd === '--squirrel-uninstall') {
+    const updateExe = path.resolve(path.dirname(process.execPath), '..', 'Update.exe');
+    spawn(updateExe, ['--removeShortcut=' + target], { detached: true }).on('close', () => app.quit());
+    return true;
+  }
+  if (cmd === '--squirrel-obsolete') {
+    app.quit();
+    return true;
+  }
+  return false;
+}
+
+const isSquirrelStartup = handleSquirrelEvent();
+
 // ── Paths ──────────────────────────────────────────────────────────────
 const STATE_DIR = path.join(require('os').homedir(), '.mom-agent');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
-const STOP_FLAG = path.join(STATE_DIR, 'stop.flag');
 const SETTINGS_FILE = path.join(STATE_DIR, 'settings.json');
-
-function getBackendDir() {
-  if (app.isPackaged) {
-    const p1 = path.join(process.resourcesPath, 'backend');
-    if (fs.existsSync(p1)) return p1;
-    return process.resourcesPath;
-  }
-  return path.join(app.getAppPath(), 'backend');
-}
-
-function pyScript(name) {
-  const dir = getBackendDir();
-  return path.join(dir, name);
-}
 
 // Load .env file only in local development so packaged apps do not bundle secrets
 function loadDotEnv() {
   if (app.isPackaged) return;
-  const envPath = path.join(app.getAppPath(), 'backend', '.env');
+  const envPath = path.join(app.getAppPath(), '.env');
   if (!fs.existsSync(envPath)) return;
   const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
   for (const raw of lines) {
@@ -80,19 +85,21 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => mainWindow.show());
 }
 
-app.whenReady().then(() => {
-  loadDotEnv();
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  createWindow();
-});
+if (!isSquirrelStartup) {
+  app.whenReady().then(() => {
+    loadDotEnv();
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    createWindow();
+  });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}
 
 // ── Window control IPC ─────────────────────────────────────────────────
 ipcMain.on('app:minimize', () => mainWindow?.minimize());
@@ -102,18 +109,32 @@ ipcMain.on('app:maximize', () => {
 });
 ipcMain.on('app:close', () => mainWindow?.close());
 
+// ── Desktop Capturer (System Loopback Audio Source ID) ─────────────────
+ipcMain.handle('desktop-capturer:get-sources', async () => {
+  try {
+    const sources = await desktopCapturer.getSources({ types: ['screen'] });
+    return sources.map((s) => ({ id: s.id, name: s.name }));
+  } catch (err) {
+    console.error('Failed to get desktop sources:', err);
+    return [];
+  }
+});
+
 // ── Settings IPC ───────────────────────────────────────────────────────
 function getSettings() {
   const defaults = {
-    pythonPath: process.platform === 'win32' ? 'python' : 'python3',
-    whisperModel: 'small',
     geminiModel: 'gemini-3.6-flash',
     geminiApiKey: app.isPackaged ? '' : (process.env.GEMINI_API_KEY || ''),
   };
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
-      if (saved.geminiModel === 'gemini-2.0-flash') {
+      if (
+        !saved.geminiModel ||
+        saved.geminiModel === 'gemini-2.0-flash' ||
+        saved.geminiModel === 'gemini-2.5-flash' ||
+        saved.geminiModel === 'gemini-1.5-flash'
+      ) {
         saved.geminiModel = 'gemini-3.6-flash';
       }
       return { ...defaults, ...saved };
@@ -132,52 +153,171 @@ ipcMain.handle('settings:save', (_e, settings) => {
   return { ok: true };
 });
 
+// ── Gemini API Helpers (Native Node.js fetch) ──────────────────────────
+async function callGemini(model, apiKey, payload) {
+  const preferredModel = (model === 'gemini-1.5-flash' || model === 'gemini-2.5-flash')
+    ? 'gemini-3.6-flash'
+    : (model || 'gemini-3.6-flash');
+
+  const modelsToTry = Array.from(new Set([
+    preferredModel,
+    'gemini-3.6-flash',
+    'gemini-3.7-flash',
+    'gemini-3.5-flash',
+    'gemini-flash-latest',
+  ]));
+  let lastError = null;
+
+  for (const m of modelsToTry) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKey}`;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        return await res.json();
+      }
+
+      const errText = await res.text();
+      lastError = new Error(`Gemini API error [${m}] (${res.status}): ${errText}`);
+      // If 404 (model not found), try next model in fallback list
+      if (res.status !== 404) {
+        throw lastError;
+      }
+    } catch (e) {
+      lastError = e;
+      if (e.message && !e.message.includes('404')) {
+        throw e;
+      }
+    }
+  }
+  throw lastError || new Error('Gemini API call failed');
+}
+
+async function transcribeAudioWithGemini(audioBuffer, mimeType, apiKey, model) {
+  const base64Audio = audioBuffer.toString('base64');
+  const prompt = `You are an expert meeting transcription assistant.
+Listen carefully to the recorded audio of this meeting and transcribe all spoken dialogue word-for-word.
+Prepend approximate timestamps formatted as [MM:SS] to each line.
+Example format:
+[00:04] Alex: Good morning everyone, let's start the sync.
+[00:12] Sarah: Thanks Alex, I have updated the release notes.
+If there is no audible speech, return "[NO_SPEECH]".
+Output only the raw transcript text, with no preamble or code fences.`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType || 'audio/webm',
+              data: base64Audio,
+            },
+          },
+          { text: prompt },
+        ],
+      },
+    ],
+  };
+
+  const data = await callGemini(model, apiKey, payload);
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return text.trim();
+}
+
+async function generateMomWithGemini(transcript, title, apiKey, model) {
+  const cleanTx = (transcript || '').trim();
+  if (!cleanTx || cleanTx === '[NO_SPEECH]') {
+    return {
+      title: title || 'Meeting',
+      attendees: [],
+      agenda: [],
+      discussion_points: ['No spoken conversation detected in the recording.'],
+      decisions: [],
+      action_items: [],
+      next_steps: [],
+    };
+  }
+
+  const prompt = `You are an expert executive secretary generating Minutes of Meeting (MOM) from a call transcript.
+The transcript may contain filler words or transcription artifacts — ignore them.
+
+Meeting title: ${title || 'Meeting'}
+
+Transcript:
+---
+${cleanTx}
+---
+
+Return ONLY a valid JSON object (no markdown, no backticks, no commentary) adhering strictly to this schema:
+{
+  "title": string,
+  "attendees": [string],
+  "agenda": [string],
+  "discussion_points": [string],
+  "decisions": [string],
+  "action_items": [{"task": string, "owner": string}],
+  "next_steps": [string]
+}`;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+    },
+  };
+
+  const data = await callGemini(model, apiKey, payload);
+  let raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    throw new Error('Failed to parse Gemini MOM JSON response.');
+  }
+}
+
 // ── Session IPC ────────────────────────────────────────────────────────
-
-// Active child process reference
-let captureProc = null;
-
 ipcMain.handle('session:start', async (_e, title) => {
   if (fs.existsSync(STATE_FILE)) {
     return { error: 'A session is already running.' };
   }
-  if (fs.existsSync(STOP_FLAG)) fs.unlinkSync(STOP_FLAG);
 
   const sessionId = `session_${Math.floor(Date.now() / 1000)}`;
   const sessionDir = path.join(STATE_DIR, sessionId);
   fs.mkdirSync(sessionDir, { recursive: true });
-  const wavPath = path.join(sessionDir, 'audio.wav');
-
-  const settings = getSettings();
-  const pythonPath = settings.pythonPath || (process.platform === 'win32' ? 'python' : 'python3');
-
-  const env = { ...process.env };
-  if (settings.geminiApiKey) env.GEMINI_API_KEY = settings.geminiApiKey;
-  if (settings.geminiModel) env.MOM_GEMINI_MODEL = settings.geminiModel;
-
-  captureProc = spawn(pythonPath, [
-    pyScript('capture.py'),
-    '--out', wavPath,
-    '--stop-flag', STOP_FLAG,
-  ], {
-    detached: false,
-    stdio: 'ignore',
-    env,
-  });
 
   const state = {
-    pid: captureProc.pid,
     title: title || 'Meeting',
-    wav_path: wavPath,
     session_dir: sessionDir,
     session_id: sessionId,
     started_at: Date.now() / 1000,
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
-  captureProc.on('exit', () => { captureProc = null; });
-
   return { ok: true, ...state };
+});
+
+ipcMain.handle('session:save-audio', async (_e, { sessionId, buffer }) => {
+  try {
+    const sessionDir = path.join(STATE_DIR, sessionId);
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+    const audioPath = path.join(sessionDir, 'audio.webm');
+    fs.writeFileSync(audioPath, Buffer.from(buffer));
+    return { ok: true, audioPath };
+  } catch (err) {
+    console.error('Failed to save audio file:', err);
+    return { error: err.message };
+  }
 });
 
 ipcMain.handle('session:stop', async (event) => {
@@ -194,74 +334,41 @@ ipcMain.handle('session:stop', async (event) => {
   }
 
   try {
-    // 1. Signal stop
-    sender.send('progress', { step: 'stopping', message: 'Stopping recording...' });
-    fs.writeFileSync(STOP_FLAG, '');
+    sender.send('progress', { step: 'stopping', message: 'Finalizing recording...' });
 
-    // Wait for capture process to exit
-    await new Promise((resolve) => {
-      let checks = 0;
-      const interval = setInterval(() => {
-        checks++;
-        if (!captureProc || checks > 100) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 200);
-      if (captureProc) {
-        captureProc.on('exit', () => { clearInterval(interval); resolve(); });
-      } else {
-        clearInterval(interval);
-        resolve();
-      }
-    });
-
-    // Cleanup state
+    // Clean up active session state file
     try { fs.unlinkSync(STATE_FILE); } catch {}
-    try { fs.unlinkSync(STOP_FLAG); } catch {}
 
-    const wavPath = state.wav_path;
-    if (!fs.existsSync(wavPath) || fs.statSync(wavPath).size === 0) {
+    const audioPath = path.join(state.session_dir, 'audio.webm');
+    if (!fs.existsSync(audioPath) || fs.statSync(audioPath).size === 0) {
       sender.send('progress', { step: 'error', message: 'No audio was captured.' });
       return { error: 'No audio was captured.' };
     }
 
     const settings = getSettings();
-    const pythonPath = settings.pythonPath || (process.platform === 'win32' ? 'python' : 'python3');
-    const env = { ...process.env };
-    if (settings.whisperModel) env.MOM_WHISPER_MODEL = settings.whisperModel;
-    if (settings.geminiModel) env.MOM_GEMINI_MODEL = settings.geminiModel;
-    if (settings.geminiApiKey) env.GEMINI_API_KEY = settings.geminiApiKey;
+    const apiKey = settings.geminiApiKey || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      const msg = 'Gemini API Key is missing. Please configure your API key in Settings.';
+      sender.send('progress', { step: 'error', message: msg });
+      return { error: msg };
+    }
 
-    const backendDir = getBackendDir();
+    const model = settings.geminiModel || 'gemini-2.5-flash';
+    const audioBuffer = fs.readFileSync(audioPath);
     const txFile = path.join(state.session_dir, 'transcript.txt');
     const momFile = path.join(state.session_dir, 'mom.json');
 
-    // 2. Transcribe
-    sender.send('progress', { step: 'transcribing', message: 'Transcribing audio...' });
-    await runPython(pythonPath, ['-c', `
-import sys
-sys.path.insert(0, ${JSON.stringify(backendDir)})
-from transcribe import transcribe
-t = transcribe(${JSON.stringify(wavPath)})
-with open(${JSON.stringify(txFile)}, 'w', encoding='utf-8') as f:
-    f.write(t or '')
-    `], env);
+    // 1. Transcribe audio with Gemini
+    sender.send('progress', { step: 'transcribing', message: 'Transcribing meeting audio with Gemini...' });
+    const transcript = await transcribeAudioWithGemini(audioBuffer, 'audio/webm', apiKey, model);
+    fs.writeFileSync(txFile, transcript || '', 'utf-8');
 
-    // 3. Summarize
-    sender.send('progress', { step: 'summarizing', message: 'Generating MOM with Gemini...' });
-    await runPython(pythonPath, ['-c', `
-import sys, json
-sys.path.insert(0, ${JSON.stringify(backendDir)})
-from summarize import generate_mom
-with open(${JSON.stringify(txFile)}, 'r', encoding='utf-8') as f:
-    t = f.read()
-mom = generate_mom(t, title=${JSON.stringify(state.title || 'Meeting')})
-with open(${JSON.stringify(momFile)}, 'w', encoding='utf-8') as f:
-    f.write(json.dumps(mom, indent=2))
-    `], env);
+    // 2. Generate structured MOM with Gemini
+    sender.send('progress', { step: 'summarizing', message: 'Generating Minutes of Meeting with Gemini...' });
+    const mom = await generateMomWithGemini(transcript, state.title, apiKey, model);
+    fs.writeFileSync(momFile, JSON.stringify(mom, null, 2), 'utf-8');
 
-    // 4. Save metadata
+    // 3. Save session metadata
     const meta = {
       title: state.title || 'Meeting',
       session_id: state.session_id,
@@ -273,39 +380,12 @@ with open(${JSON.stringify(momFile)}, 'w', encoding='utf-8') as f:
     sender.send('progress', { step: 'done', message: 'Done!', sessionId: state.session_id });
     return { ok: true, sessionId: state.session_id };
   } catch (err) {
-    console.error('Stop session failed:', err);
+    console.error('Stop session processing failed:', err);
     try { fs.unlinkSync(STATE_FILE); } catch {}
-    try { fs.unlinkSync(STOP_FLAG); } catch {}
     sender.send('progress', { step: 'error', message: err.message || 'Processing failed.' });
     return { error: err.message || 'Processing failed.' };
   }
 });
-
-function runPython(pythonPath, args, env) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(pythonPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stderr = '';
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Python exited with ${code}: ${stderr}`));
-    });
-    proc.on('error', (err) => {
-      if (pythonPath !== 'python' && process.platform === 'win32') {
-        const retry = spawn('python', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-        let retryStderr = '';
-        retry.stderr.on('data', (d) => { retryStderr += d.toString(); });
-        retry.on('exit', (c) => {
-          if (c === 0) resolve();
-          else reject(new Error(`Python exited with ${c}: ${retryStderr}`));
-        });
-        retry.on('error', reject);
-        return;
-      }
-      reject(err);
-    });
-  });
-}
 
 ipcMain.handle('session:status', () => {
   if (!fs.existsSync(STATE_FILE)) return { recording: false };
@@ -327,12 +407,12 @@ ipcMain.handle('session:list', () => {
   return dirs.map((d) => {
     const dir = path.join(STATE_DIR, d);
     const meta = {};
-    const metaPath = path.join(dir, 'meta.json');
-    const momPath = path.join(dir, 'mom.json');
+    const metaFile = path.join(dir, 'meta.json');
+    const momFile = path.join(dir, 'mom.json');
 
-    if (fs.existsSync(metaPath)) {
+    if (fs.existsSync(metaFile)) {
       try {
-        Object.assign(meta, JSON.parse(fs.readFileSync(metaPath, 'utf-8')));
+        Object.assign(meta, JSON.parse(fs.readFileSync(metaFile, 'utf-8')));
       } catch {}
     } else {
       const ts = parseInt(d.replace('session_', ''), 10);
@@ -341,36 +421,36 @@ ipcMain.handle('session:list', () => {
       meta.session_id = d;
     }
 
-    meta.hasMom = fs.existsSync(momPath);
+    meta.hasMom = fs.existsSync(momFile);
     meta.session_id = meta.session_id || d;
     return meta;
   });
 });
 
 ipcMain.handle('session:get-mom', (_e, sessionId) => {
-  const momPath = path.join(STATE_DIR, sessionId, 'mom.json');
-  if (!fs.existsSync(momPath)) return null;
+  const momFile = path.join(STATE_DIR, sessionId, 'mom.json');
+  if (!fs.existsSync(momFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(momPath, 'utf-8'));
+    return JSON.parse(fs.readFileSync(momFile, 'utf-8'));
   } catch {
     return null;
   }
 });
 
 ipcMain.handle('session:get-transcript', (_e, sessionId) => {
-  const txPath = path.join(STATE_DIR, sessionId, 'transcript.txt');
-  if (!fs.existsSync(txPath)) return null;
+  const txFile = path.join(STATE_DIR, sessionId, 'transcript.txt');
+  if (!fs.existsSync(txFile)) return null;
   try {
-    return fs.readFileSync(txPath, 'utf-8');
+    return fs.readFileSync(txFile, 'utf-8');
   } catch {
     return null;
   }
 });
 
 ipcMain.handle('session:delete', (_e, sessionId) => {
-  const dir = path.join(STATE_DIR, sessionId);
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  const sessionDir = path.join(STATE_DIR, sessionId);
+  if (fs.existsSync(sessionDir)) {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
   }
   return { ok: true };
 });

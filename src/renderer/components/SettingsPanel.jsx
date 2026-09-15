@@ -3,9 +3,7 @@ import React, { useState, useEffect } from 'react';
 export default function SettingsPanel() {
   const [settings, setSettings] = useState({
     geminiApiKey: '',
-    geminiModel: 'gemini-3.6-flash',
-    whisperModel: 'small',
-    pythonPath: 'python',
+    geminiModel: 'gemini-2.5-flash',
   });
   const [saved, setSaved] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -32,7 +30,7 @@ export default function SettingsPanel() {
   return (
     <div className="settings">
       <h1 className="settings__title">Settings</h1>
-      <p className="settings__subtitle">Configure your MOM Agent preferences.</p>
+      <p className="settings__subtitle">Configure your MOM Agent AI preferences.</p>
 
       <div className="settings__group">
         <label className="settings__label">Gemini API Key</label>
@@ -42,7 +40,7 @@ export default function SettingsPanel() {
             type={showKey ? 'text' : 'password'}
             value={settings.geminiApiKey || ''}
             onChange={(e) => update('geminiApiKey', e.target.value)}
-            placeholder="AIzaSy... / AQ.Ab8..."
+            placeholder="AIzaSy..."
             style={{ flex: 1 }}
           />
           <button
@@ -56,52 +54,24 @@ export default function SettingsPanel() {
           </button>
         </div>
         <p className="settings__hint">
-          Your Google Gemini API Key. Required for transcription and meeting minutes generation.
+          Your Google Gemini API Key from Google AI Studio. Required for audio transcription and meeting minutes generation.
         </p>
       </div>
 
       <div className="settings__group">
         <label className="settings__label">Gemini Model</label>
-        <input
-          className="settings__input"
-          type="text"
-          value={settings.geminiModel || 'gemini-3.6-flash'}
-          onChange={(e) => update('geminiModel', e.target.value)}
-          placeholder="gemini-3.6-flash"
-        />
-        <p className="settings__hint">
-          Recommended: gemini-3.6-flash for fast and structured summaries.
-        </p>
-      </div>
-
-      <div className="settings__group">
-        <label className="settings__label">Whisper Model</label>
         <select
           className="settings__select"
-          value={settings.whisperModel || 'small'}
-          onChange={(e) => update('whisperModel', e.target.value)}
+          value={settings.geminiModel || 'gemini-3.6-flash'}
+          onChange={(e) => update('geminiModel', e.target.value)}
         >
-          <option value="tiny">Tiny — Fastest, least accurate</option>
-          <option value="base">Base — Fast, good accuracy</option>
-          <option value="small">Small — Balanced (recommended)</option>
-          <option value="medium">Medium — High accuracy, slower</option>
+          <option value="gemini-3.6-flash">Gemini 3.6 Flash (Recommended — Fast & Accurate)</option>
+          <option value="gemini-3.7-flash">Gemini 3.7 Flash (Latest 3.7)</option>
+          <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+          <option value="gemini-flash-latest">Gemini Flash Latest</option>
         </select>
         <p className="settings__hint">
-          Used for local transcription. Automatically falls back to Gemini Audio if unavailable.
-        </p>
-      </div>
-
-      <div className="settings__group">
-        <label className="settings__label">Python Path</label>
-        <input
-          className="settings__input"
-          type="text"
-          value={settings.pythonPath || ''}
-          onChange={(e) => update('pythonPath', e.target.value)}
-          placeholder="python"
-        />
-        <p className="settings__hint">
-          Command or full path to the Python executable (e.g. "python" on Windows, "python3" on Linux/macOS).
+          Model used for audio listening, transcription, and MOM structuring.
         </p>
       </div>
 

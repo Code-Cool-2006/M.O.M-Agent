@@ -5,9 +5,6 @@ module.exports = {
     asar: true,
     icon: './assets/icon',
     extraResource: [
-      './backend/capture.py',
-      './backend/transcribe.py',
-      './backend/summarize.py',
       './assets',
     ],
   },

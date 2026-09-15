@@ -1,5 +1,8 @@
 node_modules
 backend/.env
+.env
+.env.*
+
 .vite
 out
 __pycache__

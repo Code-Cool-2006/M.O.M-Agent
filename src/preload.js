@@ -4,11 +4,15 @@ contextBridge.exposeInMainWorld('momAPI', {
   // Session
   startSession: (title) => ipcRenderer.invoke('session:start', title),
   stopSession: () => ipcRenderer.invoke('session:stop'),
+  saveAudio: (sessionId, arrayBuffer) => ipcRenderer.invoke('session:save-audio', { sessionId, buffer: arrayBuffer }),
   getStatus: () => ipcRenderer.invoke('session:status'),
   listSessions: () => ipcRenderer.invoke('session:list'),
   getMom: (sessionId) => ipcRenderer.invoke('session:get-mom', sessionId),
   getTranscript: (sessionId) => ipcRenderer.invoke('session:get-transcript', sessionId),
   deleteSession: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
+
+  // Audio capture sources
+  getDesktopSources: () => ipcRenderer.invoke('desktop-capturer:get-sources'),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
